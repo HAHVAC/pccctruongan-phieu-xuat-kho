@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Phiếu Xuất Kho - In / Xuất PDF (A4)</title>
+    <style>
+      :root {
+        --accent: #0b5ed7;
+        --muted: #666;
+      }
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 0;
+        padding: 20px;
+        color: #111;
+        background: #f5f6f7;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 18px;
+        border: 1px solid #e3e3e3;
+        background: #fff;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .company {
+        font-weight: 700;
+        font-size: 18px;
+      }
+      .meta {
+        text-align: right;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      h1 {
+        margin: 12px 0;
+        font-size: 20px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 6px;
+        border: 1px solid #ddd;
+        font-size: 13px;
+      }
+      .no-border {
+        border: 0;
+      }
+      .items th {
+        background: #f7f7f7;
+      }
+      .controls {
+        margin: 14px 0;
+        display: flex;
+        gap: 10px;
+      }
+      button {
+        padding: 8px 12px;
+        border-radius: 6px;
+        border: 0;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button.alt {
+        background: #6c757d;
+      }
+      input[type="text"] {
+        padding: 6px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+      }
+      @media print {
+        body {
+          padding: 0;
+        }
+        .controls {
+          display: none;
+        }
+        .container {
+          border: 0;
+          margin: 0;
+          box-shadow: none;
+        }
+      }
+      /* tối ưu bố cục in A4 */
+      .a4-wrapper {
+        width: 210mm;
+        min-height: 297mm;
+        padding: 12mm;
+        margin: 0 auto;
+        background: white;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="controls">
+      <button id="btnPrint">In (Print)</button>
+      <button id="btnPdf">Xuất PDF (A4)</button>
+      <button id="btnLoadApi" class="alt">Tải từ API</button>
+      <input
+        id="apiUrlInput"
+        type="text"
+        placeholder="API URL hoặc để trống dùng api_default"
+        style="width: 420px"
+      />
+    </div>
+
+    <div class="container a4-wrapper" id="printArea">
+      <header>
+        <div>
+          <div class="company" id="companyName">Công ty: _________</div>
+          <div style="font-size: 13px; color: var(--muted)" id="companyAddr">
+            Địa chỉ: _________
+          </div>
+        </div>
+        <div class="meta">
+          <div>Số phiếu: <strong id="soPhieu">-</strong></div>
+          <div id="ngayXuatMeta">Ngày: -</div>
+        </div>
+      </header>
+
+      <h1 style="text-align: center">PHIẾU XUẤT KHO</h1>
+
+      <table>
+        <tr>
+          <td><strong>Hạng mục</strong></td>
+          <td id="hangMuc">-</td>
+          <td><strong>Nhóm NCC</strong></td>
+          <td id="nhomNcc">-</td>
+        </tr>
+        <tr>
+          <td><strong>Nội dung</strong></td>
+          <td id="noiDung">-</td>
+          <td><strong>Nhà cung cấp</strong></td>
+          <td id="nhaCung">-</td>
+        </tr>
+        <tr>
+          <td><strong>Xưởng</strong></td>
+          <td id="xuong">-</td>
+          <td><strong>Trạng thái</strong></td>
+          <td id="trangThai">-</td>
+        </tr>
+        <tr>
+          <td><strong>Ghi chú</strong></td>
+          <td id="ghiChu">-</td>
+          <td><strong>Người lập</strong></td>
+          <td id="nguoiLap">-</td>
+        </tr>
+      </table>
+
+      <h3 style="margin-top: 12px">Danh sách mặt hàng</h3>
+      <table class="items" id="itemsTable">
+        <thead>
+          <tr>
+            <th style="width: 6%">STT</th>
+            <th style="width: 52%">Tên hàng</th>
+            <th style="width: 12%">Đơn vị</th>
+            <th style="width: 12%">Số lượng</th>
+            <th style="width: 18%">Ghi chú</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- rows inserted dynamically -->
+        </tbody>
+      </table>
+
+      <div
+        style="display: flex; justify-content: space-between; margin-top: 20px"
+      >
+        <div>
+          <div style="font-size: 13px; color: var(--muted)">Người nhận</div>
+          <div style="margin-top: 36px">(Ký, ghi rõ họ tên)</div>
+        </div>
+        <div>
+          <div style="font-size: 13px; color: var(--muted)">Người lập</div>
+          <div style="margin-top: 36px" id="nguoiLapSign">-</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- librairies for PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <script>
+          // ---- Cấu hình mặc định API (nếu cần) ----
+          const API_DEFAULT = '';
+          // Ví dụ API trả về JSON có cấu trúc giống params (so_phieu, hang_muc, nhom_ncc, noi_dung, nha_cung, xuong, trang_thai, ghi_chu, nguoi_lap, ngay_xuat, items)
+          // items là mảng object: {name, unit, qty, note}
+
+          function getParams(){
+            const params = new URLSearchParams(location.search);
+            const obj = {};
+            for (const [k,v] of params.entries()) obj[k]=v;
+            return obj;
+          }
+
+          function parseItems(raw){
+            if(!raw) return [];
+            // nếu đã là mảng (đã parse trước khi truyền vào fillData), trả về luôn
+            if(Array.isArray(raw)) return raw;
+            try{ const parsed = JSON.parse(decodeURIComponent(raw)); if(Array.isArray(parsed)) return parsed; }catch(e){}
+            try{
+              const parts = decodeURIComponent(raw).split(';;').map(s=>s.trim()).filter(Boolean);
+              return parts.map(p=>{ const [name,unit,qty,note] = p.split('~').map(x=>x?.trim()||''); return {name,unit,qty,note}; });
+            }catch(e){return []}
+          }
+
+          function fillData(params){
+            document.getElementById('soPhieu').textContent = params.so_phieu || params.so || '-';
+            document.getElementById('hangMuc').textContent = params.hang_muc || '-';
+            document.getElementById('nhomNcc').textContent = params.nhom_ncc || '-';
+            document.getElementById('noiDung').textContent = params.noi_dung || '-';
+            document.getElementById('nhaCung').textContent = params.nha_cung || '-';
+            document.getElementById('xuong').textContent = params.xuong || '-';
+            document.getElementById('trangThai').textContent = params.trang_thai || '-';
+            document.getElementById('ghiChu').textContent = params.ghi_chu || '-';
+            document.getElementById('nguoiLap').textContent = params.nguoi_lap || '-';
+            document.getElementById('nguoiLapSign').textContent = params.nguoi_lap || '-';
+            const ngay = params.ngay_xuat || params.date || params.ngay || '';
+            document.getElementById('ngayXuatMeta').textContent = ngay ? ('Ngày: ' + ngay) : '';
+
+            const itemsRaw = params.items || params.danh_sach || '';
+            const items = parseItems(itemsRaw);
+            const tbody = document.querySelector('#itemsTable tbody');
+            tbody.innerHTML = '';
+            if(items.length===0){
+              const tr = document.createElement('tr');
+              tr.innerHTML = '<td colspan="5" style="text-align:center;color:var(--muted)">Không có mặt hàng</td>';
+              tbody.appendChild(tr);
+            }else{
+              items.forEach((it,i)=>{
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${i+1}</td><td>${escapeHtml(it.name||'')}</td><td>${escapeHtml(it.unit||'')}</td><td>${escapeHtml(it.qty||'')}</td><td>${escapeHtml(it.note||'')}</td>`;
+                tbody.appendChild(tr);
+              });
+            }
+          }
+
+          function escapeHtml(s){return String(s).replace(/[&<>\\"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\':'\\','"':'&quot;'}[c]||c));}
+
+          // In trang
+          document.getElementById('btnPrint').addEventListener('click', ()=>{ window.print(); });
+
+          // Xuất PDF A4 chuẩn (mm)
+          document.getElementById('btnPdf').addEventListener('click', async ()=>{
+            const area = document.getElementById('printArea');
+            // dùng html2canvas để chụp với scale cao để ảnh nét
+            const scale = 2; // tăng nếu cần chất lượng cao hơn
+            const canvas = await html2canvas(area, {scale: scale, useCORS:true, logging:false});
+            const imgData = canvas.toDataURL('image/png');
+
+            const { jsPDF } = window.jspdf;
+            // tạo PDF A4 theo mm
+            const pdf = new jsPDF({unit:'mm', format:'a4'});
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+
+            // tỉ lệ chuyển đổi: px -> mm, lấy canvas px width/height
+            const pxPerMm = canvas.width / (pageWidth * (window.devicePixelRatio || 1));
+            // thực tế an toàn: tính tỉ lệ ảnh để vừa rộng A4 với giữ tỉ lệ
+            const imgProps = {width: canvas.width, height: canvas.height};
+            const imgRatio = imgProps.width / imgProps.height;
+            let renderWidth = pageWidth - 12; // lề 6mm mỗi bên
+            let renderHeight = renderWidth / imgRatio;
+            if(renderHeight > pageHeight - 12){
+              renderHeight = pageHeight - 12;
+              renderWidth = renderHeight * imgRatio;
+            }
+            const x = (pageWidth - renderWidth) / 2;
+            const y = 6; // top margin
+
+            pdf.addImage(imgData, 'PNG', x, y, renderWidth, renderHeight);
+
+            // nếu nội dung dài hơn một trang: simple split -> vẽ phần còn lại theo chiều dọc
+            // (nếu cần hỗ trợ nội dung nhiều trang, có thể chia canvas theo các đoạn cao bằng pageHeight*pxRatio)
+            const soPhieu = (new URLSearchParams(location.search).get('so_phieu') || 'phieu').replace(/[^a-z0-9\-]/ig,'_');
+            pdf.save(soPhieu + '.pdf');
+          });
+
+          // ---- tải dữ liệu từ API ----
+          async function loadFromApi(apiUrl){
+            if(!apiUrl) apiUrl = API_DEFAULT;
+            if(!apiUrl) { alert('Chưa cấu hình API. Nhập API URL vào ô rồi thử lại.'); return; }
+            try{
+              const r = await fetch(apiUrl, {method:'GET'});
+              if(!r.ok) throw new Error('Status ' + r.status);
+              const data = await r.json();
+              // data có thể đã là object params hoặc một mảng; nếu cần map lại, chỉnh ở đây
+              // Gợi ý: API trả về {so_phieu:'', hang_muc:'', items:[{name,unit,qty,note}], ...}
+              fillData(data);
+            }catch(err){
+              console.error(err);
+              alert('Lấy dữ liệu từ API thất bại: ' + err.message + '
+      Kiểm tra CORS và URL.');
+            }
+          }
+
+          document.getElementById('btnLoadApi').addEventListener('click', ()=>{
+            const url = document.getElementById('apiUrlInput').value.trim() || API_DEFAULT;
+            loadFromApi(url);
+          });
+
+          // Khi load trang: nếu có params trên URL thì ưu tiên dùng query string
+          (function(){
+            const params = getParams();
+            // nếu có api param, tự gọi API
+            if(params.api_url){
+              const api = decodeURIComponent(params.api_url);
+              document.getElementById('apiUrlInput').value = api;
+              loadFromApi(api);
+              return;
+            }
+            // nếu có api_id + api_base, gọi API_BASE + '/' + id
+            if(params.api_base && params.api_id){
+              const url = params.api_base.replace(/\/+$/,'') + '/' + encodeURIComponent(params.api_id);
+              document.getElementById('apiUrlInput').value = url;
+              loadFromApi(url);
+              return;
+            }
+            // nếu có query fields thông thường -> fill
+            if(Object.keys(params).length) fillData(params);
+          })();
+
+          // ----- GHI chú kỹ thuật cho bạn -----
+          // 1) Để API hoạt động: server phải trả JSON với CORS (Access-Control-Allow-Origin) cho domain bạn host file này.
+          // 2) Cấu trúc JSON khuyến nghị:
+          /* {
+               "so_phieu": "DXVT-HTP-A1-001",
+               "hang_muc": "Xuất",
+               "nhom_ncc": "NCC314",
+               "noi_dung": "xuất thi công",
+               "nha_cung": "NCC314",
+               "xuong": "A1",
+               "trang_thai": "Hoàn thành",
+               "ghi_chu": "...",
+               "nguoi_lap": "TL0068",
+               "ngay_xuat": "2025/02/01",
+               "items": [{"name":"Báo cháy","unit":"cái","qty":3,"note":""}, ...]
+             }
+          */
+          // 3) Nếu API trả tên trường khác, map lại trước khi gọi fillData.
+    </script>
+  </body>
+</html>
