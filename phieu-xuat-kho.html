@@ -84,145 +84,192 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
 <script>
-/* -------------------------
-  HỖ TRỢ 2 PHƯƠNG ÁN:
-  - Query: URL chứa các param như so_phieu, hang_muc, items (items có thể là JSON string hoặc dạng "a~b~c~d;;e~f~...").
-  - API: URL có param api_url hoặc api_base + api_id -> fetch JSON.
--------------------------*/
+/* --------- UTILS --------- */
+function safeTextField(f) {
+  if (f === undefined || f === null) return '';
+  if (typeof f === 'string') return f.trim();
+  if (Array.isArray(f) && f.length) {
+    // prefer object.text
+    const fn = f.find(x => x && typeof x === 'object' && 'text' in x);
+    if (fn && fn.text) return String(fn.text).trim();
+    return String(f[0]).trim();
+  }
+  if (typeof f === 'object') {
+    if ('text' in f) return String(f.text).trim();
+    if ('value' in f && Array.isArray(f.value) && f.value.length) {
+      // sometimes item_string.value is array of {text: 'a~b~c'}
+      const v0 = f.value[0];
+      if (v0 && typeof v0 === 'object' && 'text' in v0) return String(v0.text).trim();
+      return String(f.value[0]).trim();
+    }
+    return JSON.stringify(f);
+  }
+  return String(f);
+}
+
+function parseItemFromRow(it){
+  // Accept forms:
+  // 1) {name, unit, qty, note} -> already formatted
+  // 2) {record_id} -> no details (placeholder)
+  // 3) {fields: {...}} -> parse from fields
+  // 4) item_string pattern -> parse "~" delimited parts
+  if (!it) return { name:'', unit:'', qty:'', note:'', record_id: it?.record_id || null };
+
+  // already formatted
+  if (it.name || it.unit || it.qty || it.note) {
+    return {
+      record_id: it.record_id || it.recordId || it.id || null,
+      name: safeTextField(it.name),
+      unit: safeTextField(it.unit),
+      qty:  safeTextField(it.qty),
+      note: safeTextField(it.note)
+    };
+  }
+
+  // if item contains fields key (backend raw)
+  if (it.fields) {
+    const f = it.fields;
+    // common keys seen in your Data: "Tên VTHH", "Đơn vị tính", "Số lượng" or item_string
+    let name = safeTextField(f["Tên VTHH"] || f["Tên Vật tư"] || f["Tên"] || f["name"]);
+    let unit = safeTextField(f["Đơn vị tính"] || f["Đơn vị"] || f["unit"]);
+    let note = safeTextField(f["Ghi chú"] || f["note"]);
+    let qty  = '';
+
+    // try item_string parsing pattern: value[0].text -> "Name~Unit~Qty~"
+    try {
+      const itemStr = f["item_string"] || f["item_str"] || f["item"];
+      if (itemStr && typeof itemStr === 'object') {
+        const val = itemStr.value || itemStr["value"];
+        if (Array.isArray(val) && val.length) {
+          const t0 = safeTextField(val[0]); // maybe "Tủ trung tâm...~Tủ~ - ~"
+          const mparts = t0.split('~').map(s=>s.trim());
+          if (!name && mparts[0]) name = mparts[0];
+          if (!unit && mparts[1]) unit = mparts[1];
+          if (mparts[2]) qty = mparts[2];
+        }
+      }
+    } catch(e){ /*ignore*/ }
+
+    // fallback check explicit quantity field
+    if (!qty) {
+      qty = safeTextField(f["Số lượng"] || f["qty"] || f["Quantity"]);
+    }
+
+    return {
+      record_id: it.record_id || it.id || null,
+      name, unit, qty, note
+    };
+  }
+
+  // if only record_id present -> placeholder (frontend can't fetch secret data)
+  if (it.record_id && !it.name) {
+    return { record_id: it.record_id, name:'', unit:'', qty:'', note:'' };
+  }
+
+  // last fallback: try to treat it as plain string encoded list
+  if (typeof it === 'string') {
+    const parts = decodeURIComponent(it).split(';;').map(s=>s.trim()).filter(Boolean);
+    if (parts.length) {
+      const [name, unit, qty, note] = parts[0].split('~').map(s=>s.trim());
+      return { record_id: null, name: name||'', unit:unit||'', qty:qty||'', note:note||'' };
+    }
+  }
+
+  return { record_id: it.record_id || null, name:'', unit:'', qty:'', note:'' };
+}
+
+/* --------- RENDERING --------- */
+function fillData(data) {
+  // meta
+  document.getElementById('soPhieu').textContent = data.so_phieu || data.so || '-';
+  document.getElementById('hangMuc').textContent = data.hang_muc || '-';
+  document.getElementById('nhomNcc').textContent = data.nhom_ncc || '-';
+  document.getElementById('noiDung').textContent = data.noi_dung || '-';
+  document.getElementById('nhaCung').textContent = data.nha_cung || '-';
+  document.getElementById('xuong').textContent = data.xuong || '-';
+  document.getElementById('trangThai').textContent = data.trang_thai || '-';
+  document.getElementById('ghiChu').textContent = data.ghi_chu || '-';
+  document.getElementById('nguoiLap').textContent = data.nguoi_lap || '-';
+  document.getElementById('nguoiLapSign').textContent = data.nguoi_lap || '-';
+  if (data.ngay_xuat) document.getElementById('ngayXuatMeta').textContent = 'Ngày: ' + data.ngay_xuat;
+
+  // items: robust parse
+  const itemsRaw = data.items || data.danh_sach || [];
+  const parsed = (Array.isArray(itemsRaw) ? itemsRaw : (typeof itemsRaw === 'string' ? [itemsRaw] : []))
+                 .map(parseItemFromRow);
+
+  // if parsed items have empty name but record_id present -> backend not returning details.
+  // show a message to user in that case (helpful)
+  const allEmpty = parsed.every(it => !it.name && !it.unit && !it.qty && !it.note);
+  if (allEmpty && parsed.length) {
+    console.warn("Items array contains only record_id, not detailed fields. Ensure backend returns full items (batch_get).");
+    // optionally show a small notice
+    const noteEl = document.getElementById('apiNotice');
+    if (noteEl) noteEl.textContent = "Lưu ý: Items chỉ có record_id. Hãy kiểm tra backend (DATA_APP_TOKEN/DATA_TABLE_ID).";
+  }
+
+  // render table rows (ensure at least 8 rows)
+  const tbody = document.querySelector('#itemsTable tbody');
+  tbody.innerHTML = '';
+  const rowsToShow = Math.max(parsed.length, 8);
+  for (let i = 0; i < rowsToShow; i++) {
+    const it = parsed[i] || {name:'', unit:'', qty:'', note:''};
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i+1}</td>
+                    <td>${escapeHtml(it.name||'')}</td>
+                    <td>${escapeHtml(it.unit||'')}</td>
+                    <td>${escapeHtml(it.qty||'')}</td>
+                    <td>${escapeHtml(it.note||'')}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]||c)); }
+
+/* --------- Load from API using api_url param or api_default --------- */
+const API_DEFAULT = '';
 
 function getParams(){
-  const ps = new URLSearchParams(location.search);
+  const params = new URLSearchParams(location.search);
   const obj = {};
-  for(const [k,v] of ps.entries()) obj[k]=v;
+  for (const [k,v] of params.entries()) obj[k]=v;
   return obj;
 }
 
-function safeText(s){ if(s===null||s===undefined||s==='') return '-'; return String(s); }
-function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-// parseItems: chấp nhận
-//  - JSON array string: [{"name":"...","unit":"...","qty":...,"note":"..."}]
-//  - chuỗi phân tách bằng ';;' và mỗi phần 'name~unit~qty~note'
-function parseItems(raw){
-  if(!raw) return [];
-  // nếu là JSON
-  try{
-    const j = JSON.parse(raw);
-    if(Array.isArray(j)) return j.map(it=>({name:it.name||it.ten||'', unit:it.unit||it.don_vi||'', qty:it.qty||it.so_luong||'', note:it.note||it.ghi_chu||''}));
-  }catch(e){}
-  // nếu dạng 'a~b~c~d;;e~f~g~h'
-  try{
-    const parts = raw.split(';;').map(x=>x.trim()).filter(Boolean);
-    if(parts.length>0){
-      return parts.map(p=>{
-        const [name,unit,qty,note] = p.split('~').map(x=>x?x.trim():'');
-        return {name:name||'', unit:unit||'', qty:qty||'', note:note||''};
-      });
-    }
-  }catch(e){}
-  // fallback
-  return [{name:raw, unit:'', qty:'', note:''}];
-}
-
-function fillFromObject(data){
-  // map nhiều tên field để an toàn
-  const pick = (obj, names)=> names.reduce((acc,n)=> acc || obj[n] || obj[n.toLowerCase()] || null, null);
-  document.getElementById('soPhieu').textContent = safeText(pick(data, ['so_phieu','soPhieu','so','soPhieu']));
-  document.getElementById('hangMuc').textContent = safeText(pick(data, ['hang_muc','hangMuc','hangmuc']));
-  document.getElementById('nhomNcc').textContent = safeText(pick(data, ['nhom_ncc','nhomNcc','nhomncc']));
-  document.getElementById('noiDung').textContent = safeText(pick(data, ['noi_dung','noiDung','noi']));
-  document.getElementById('nhaCung').textContent = safeText(pick(data, ['nha_cung','nhaCung','nha']));
-  document.getElementById('xuong').textContent = safeText(pick(data, ['xuong','xuong']));
-  document.getElementById('trangThai').textContent = safeText(pick(data, ['trang_thai','trangThai']));
-  document.getElementById('ghiChu').textContent = safeText(pick(data, ['ghi_chu','ghiChu']));
-  document.getElementById('nguoiLap').textContent = safeText(pick(data, ['nguoi_lap','nguoiLap']));
-  if(document.getElementById('nguoiLapSign')) document.getElementById('nguoiLapSign').textContent = safeText(pick(data, ['nguoi_lap','nguoiLap']));
-  const ngay = pick(data, ['ngay_xuat','ngayXuat','ngay','date']);
-  if(document.getElementById('ngayXuatMeta')) document.getElementById('ngayXuatMeta').textContent = ngay?('Ngày: ' + ngay): 'Ngày: -';
-
-  // items
-  const itemsRaw = pick(data, ['items','Items','danh_sach','items_json']) || '';
-  const items = Array.isArray(itemsRaw) ? itemsRaw.map(it=>({name:it.name||it.ten||'',unit:it.unit||'',qty:it.qty||'',note:it.note||''})) : parseItems(itemsRaw);
-  const tbody = document.querySelector('#itemsTable tbody');
-  tbody.innerHTML = '';
-  if(items.length===0){
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="5" style="text-align:center;color:var(--muted)">Không có mặt hàng</td>';
-    tbody.appendChild(tr);
-  } else {
-    items.forEach((it,i)=>{
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.unit)}</td><td>${escapeHtml(it.qty)}</td><td>${escapeHtml(it.note)}</td>`;
-      tbody.appendChild(tr);
-    });
+async function loadFromApi(apiUrl){
+  if(!apiUrl) apiUrl = API_DEFAULT;
+  if(!apiUrl) { alert('Chưa cấu hình API. Nhập API URL vào ô rồi thử lại.'); return; }
+  try {
+    const r = await fetch(apiUrl, {method:'GET'});
+    if(!r.ok) throw new Error('Status ' + r.status);
+    const data = await r.json();
+    // show raw json at bottom for debugging (optional)
+    const dbgNode = document.getElementById('api-debug');
+    if (dbgNode) dbgNode.textContent = JSON.stringify(data, null, 2);
+    fillData(data);
+  } catch(err){
+    console.error(err);
+    alert('Lấy dữ liệu từ API thất bại: ' + err.message + '. Kiểm tra CORS / URL.');
   }
 }
 
-/* ----- LOGIC KHI LOAD TRANG -----
-  1) Nếu URL có api_url => fetch JSON từ api_url
-  2) Else nếu có api_base + api_id => build URL và fetch
-  3) Else nếu có bất kỳ query param (so_phieu / hang_muc / items ...) => fill trực tiếp từ query
-*/
-async function init(){
+// auto-run on load: prefer query param api_url
+(function(){
   const params = getParams();
-  // api_url trực tiếp
   if(params.api_url){
-    try{
-      const r = await fetch(decodeURIComponent(params.api_url));
-      const j = await r.json();
-      fillFromObject(j);
-      return;
-    }catch(e){ console.error('Fetch api_url failed', e); }
-  }
-  // api_base + api_id
-  if(params.api_base && params.api_id){
-    const url = params.api_base.replace(/\/+$/,'') + '/' + encodeURIComponent(params.api_id);
-    try{
-      const r = await fetch(url);
-      const j = await r.json();
-      fillFromObject(j);
-      return;
-    }catch(e){ console.error('Fetch api_base failed', e); }
-  }
-  // query direct - có params -> dùng trực tiếp
-  if(Object.keys(params).length){
-    fillFromObject(params);
+    const api = decodeURIComponent(params.api_url);
+    document.getElementById('apiUrlInput').value = api;
+    loadFromApi(api);
     return;
   }
-  // không có dữ liệu
-  console.info('No params or api provided. Page shows empty form.');
-}
-
-document.getElementById('btnPrint').addEventListener('click', ()=>window.print());
-document.getElementById('btnPdf').addEventListener('click', async ()=>{
-  const area = document.getElementById('printArea');
-  const canvas = await html2canvas(area, {scale:2, useCORS:true});
-  const imgData = canvas.toDataURL('image/png');
-  const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({unit:'mm', format:'a4'});
-  const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeight = pdf.internal.pageSize.getHeight();
-  const imgRatio = canvas.width / canvas.height;
-  let renderWidth = pageWidth - 12;
-  let renderHeight = renderWidth / imgRatio;
-  if(renderHeight > pageHeight - 12){
-    renderHeight = pageHeight - 12;
-    renderWidth = renderHeight * imgRatio;
+  if(params.so){
+    // fallback: you may call your own api by so directly if your backend supports path param
+    const apiPath = 'https://phieu-in.vercel.app/api/phieu/' + encodeURIComponent(params.so);
+    document.getElementById('apiUrlInput').value = apiPath;
+    loadFromApi(apiPath);
+    return;
   }
-  const x = (pageWidth - renderWidth)/2, y = 6;
-  pdf.addImage(imgData, 'PNG', x, y, renderWidth, renderHeight);
-  const params = new URLSearchParams(location.search);
-  const filename = (params.get('so_phieu') || params.get('soPhieu') || 'phieu').replace(/[^a-z0-9_\-]/ig,'_');
-  pdf.save(filename + '.pdf');
-});
-
-document.getElementById('btnLoadApi').addEventListener('click', ()=>{
-  const url = document.getElementById('apiUrlInput').value.trim();
-  if(!url) return alert('Nhập API URL vào ô bên cạnh rồi thử lại.');
-  fetch(url).then(r=>r.json()).then(j=>fillFromObject(j)).catch(e=>alert('Load API thất bại: '+e.message));
-});
-
-init();
+})();
 </script>
 </body>
 </html>
